@@ -1,0 +1,13 @@
+[package]
+name = "agent-fn-registry"
+version = "0.1.0"
+edition = "2021"
+description = "Registry of LLM agent tools: callable + schema + side-effects + defaults"
+license = "MIT"
+repository = "https://github.com/MukundaKatta/agent-fn-registry-rs"
+keywords = ["agent", "tools", "llm", "registry", "dispatch"]
+categories = ["api-bindings"]
+exclude = ["target/*", ".github/*", "*.log"]
+
+[dependencies]
+serde_json = "1"
