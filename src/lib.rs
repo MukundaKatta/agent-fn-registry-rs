@@ -5,7 +5,7 @@ Keeps the callable, schema, side-effect tags, and default args
 in one place instead of scattered parallel structures.
 
 ```rust
-use agent_fn_registry::{Registry, ToolNotFoundError};
+use agent_fn_registry::Registry;
 use serde_json::{json, Value};
 
 let mut reg = Registry::new();
@@ -119,9 +119,7 @@ impl Registry {
         if let Some(obj) = schema.as_object_mut() {
             obj.insert("name".to_owned(), Value::String(name.clone()));
         }
-        let defaults_map = defaults
-            .and_then(|v| v.into_object())
-            .unwrap_or_default();
+        let defaults_map = defaults.and_then(|v| v.into_object()).unwrap_or_default();
         let entry = ToolEntry {
             name: name.clone(),
             schema,
@@ -155,15 +153,36 @@ impl Registry {
         self.tools.is_empty()
     }
 
-    /// Sorted list of registered tool names.
-    pub fn tool_names(&self) -> Vec<&str> {
+    /// Tool names sorted lexicographically.
+    ///
+    /// Used internally to give every bulk accessor a deterministic order
+    /// regardless of the underlying `HashMap` iteration order.
+    fn sorted_names(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self.tools.keys().map(String::as_str).collect();
         names.sort();
         names
     }
 
+    /// Sorted list of registered tool names.
+    pub fn tool_names(&self) -> Vec<&str> {
+        self.sorted_names()
+    }
+
+    /// All registered tool entries, sorted by name.
+    ///
+    /// Handy for inspecting or serializing the whole registry without
+    /// looking each tool up by name.
+    pub fn entries(&self) -> Vec<&ToolEntry> {
+        self.sorted_names()
+            .into_iter()
+            .map(|n| &self.tools[n])
+            .collect()
+    }
+
     pub fn get(&self, name: &str) -> Result<&ToolEntry, ToolNotFoundError> {
-        self.tools.get(name).ok_or_else(|| ToolNotFoundError { name: name.to_owned() })
+        self.tools.get(name).ok_or_else(|| ToolNotFoundError {
+            name: name.to_owned(),
+        })
     }
 
     pub fn get_schema(&self, name: &str) -> Result<Value, ToolNotFoundError> {
@@ -183,11 +202,7 @@ impl Registry {
     /// Look up the tool by name and call it.
     ///
     /// Defaults are merged in first; caller-supplied keys in `args` win.
-    pub fn dispatch(
-        &self,
-        name: &str,
-        args: Option<Value>,
-    ) -> Result<Value, ToolNotFoundError> {
+    pub fn dispatch(&self, name: &str, args: Option<Value>) -> Result<Value, ToolNotFoundError> {
         let entry = self.get(name)?;
         let mut merged = entry.defaults.clone();
         if let Some(a) = args {
@@ -202,16 +217,15 @@ impl Registry {
 
     /// All schemas in Anthropic Messages-API shape (plain schema objects).
     pub fn anthropic_tools(&self) -> Vec<Value> {
-        let mut names: Vec<&str> = self.tools.keys().map(String::as_str).collect();
-        names.sort();
-        names.iter().map(|n| self.tools[*n].schema.clone()).collect()
+        self.sorted_names()
+            .iter()
+            .map(|n| self.tools[*n].schema.clone())
+            .collect()
     }
 
     /// All schemas in OpenAI function-calling shape.
     pub fn openai_functions(&self) -> Vec<Value> {
-        let mut names: Vec<&str> = self.tools.keys().map(String::as_str).collect();
-        names.sort();
-        names
+        self.sorted_names()
             .iter()
             .map(|n| {
                 let schema = &self.tools[*n].schema;
@@ -324,6 +338,30 @@ mod tests {
     }
 
     #[test]
+    fn entries_sorted_by_name() {
+        let reg = make_registry();
+        let names: Vec<&str> = reg.entries().iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["add", "echo"]);
+    }
+
+    #[test]
+    fn entries_empty() {
+        let reg = Registry::new();
+        assert!(reg.entries().is_empty());
+    }
+
+    #[test]
+    fn entries_carry_metadata() {
+        let reg = make_registry();
+        let entries = reg.entries();
+        // first entry is "add" (sorted); it has the "compute" side effect.
+        assert_eq!(entries[0].name, "add");
+        assert!(entries[0].side_effects.contains("compute"));
+        // "echo" carries a default arg.
+        assert_eq!(entries[1].defaults["msg"], json!("default"));
+    }
+
+    #[test]
     fn dispatch_with_args() {
         let reg = make_registry();
         let result = reg.dispatch("echo", Some(json!({"msg": "hello"}))).unwrap();
@@ -340,7 +378,9 @@ mod tests {
     #[test]
     fn dispatch_args_override_defaults() {
         let reg = make_registry();
-        let result = reg.dispatch("echo", Some(json!({"msg": "override"}))).unwrap();
+        let result = reg
+            .dispatch("echo", Some(json!({"msg": "override"})))
+            .unwrap();
         assert_eq!(result, json!("override"));
     }
 
@@ -354,7 +394,9 @@ mod tests {
     #[test]
     fn dispatch_add() {
         let reg = make_registry();
-        let result = reg.dispatch("add", Some(json!({"a": 3.0, "b": 4.0}))).unwrap();
+        let result = reg
+            .dispatch("add", Some(json!({"a": 3.0, "b": 4.0})))
+            .unwrap();
         assert!((result.as_f64().unwrap() - 7.0).abs() < 1e-9);
     }
 
